@@ -13,9 +13,11 @@ Pipeline completo de clasificación de noticias **AG News** (4 clases), del text
 | **Test (evaluación única)** | **0,892** | **0,892** |
 | Clasificador trivial (siempre la misma clase) | 0,100 | 0,250 |
 
-**Modelo final:** `TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True)` + `MultinomialNB(alpha=0.3)`.
+**Modelo final:** `TfidfVectorizer(ngram_range=(1, 2), min_df=2, max_df=0.95, sublinear_tf=True)` + `MultinomialNB(alpha=0.3)`, guardado en `models/clasificador_tfidf_nb.joblib`.
 
 ![Matriz de confusión](reports/figures/matriz_confusion.png)
+
+![Curvas Precision-Recall](reports/figures/curvas_precision_recall.png)
 
 ## Estructura del repositorio
 
@@ -26,14 +28,17 @@ ds3-clasificador-tfidf/
 │   └── ag_news/                   # splits originales: ag_news_train.csv (8.000) y ag_news_test.csv (2.000)
 ├── src/
 │   ├── text_preprocessing.py      # preprocesamiento del Módulo 2 (regex + spaCy), reutilizado tal cual
-│   └── train_baseline.py          # carga, TF-IDF, experimentos con CV, entrenamiento final y evaluación
+│   └── train_baseline.py          # carga, TF-IDF/BoW, experimentos con CV, entrenamiento final, evaluación,
+│                                  # guardado del modelo y predecir_categoria()
 ├── notebooks/
 │   └── 03_clasificador_tfidf.ipynb  # recorrido completo, con todas las celdas ejecutadas y sus salidas
+├── models/
+│   └── clasificador_tfidf_nb.joblib   # Pipeline entrenado (TF-IDF + Naive Bayes), listo para predecir
 ├── reports/
 │   ├── experimentos_cv.csv        # experimento 1: modelo × ngram_range × max_features
 │   ├── regularizacion_cv.csv      # experimento 2: alpha / C de cada modelo
 │   ├── resumen.json               # configuración elegida y métricas en test
-│   └── figures/                   # matriz de confusión y curvas de experimentación
+│   └── figures/                   # matriz de confusión, curvas P-R, BoW vs. TF-IDF y experimentos
 ├── requirements.txt
 └── README.md
 ```
@@ -44,7 +49,19 @@ ds3-clasificador-tfidf/
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python -m spacy download en_core_web_sm
-python -m src.train_baseline                            # ~1 minuto: preprocesa, experimenta, entrena y evalúa
+python -c "import nltk; nltk.download('stopwords')"   # solo para la comparación con stemming del notebook
+python -m src.train_baseline                            # ~1 minuto: preprocesa, experimenta, entrena, evalúa y guarda el modelo
+```
+
+**Predecir titulares nuevos con el modelo guardado:**
+
+```python
+from src.train_baseline import predecir_categoria
+predecir_categoria(["Oil prices jump as OPEC agrees to cut output",
+                    "Messi scores twice as Barcelona beats Real Madrid"])
+#   categoria  Business  Sci_Tech  Sports  World
+#   Business      0.992     0.002   0.001  0.006
+#   Sports        0.004     0.009   0.982  0.006
 ```
 
 También se puede abrir `notebooks/03_clasificador_tfidf.ipynb` y ejecutar todas las celdas (en Colab, la primera celda clona el repo).
@@ -87,9 +104,23 @@ Después de ajustar la regularización de cada modelo con su mejor vectorizador 
 - Es **interpretable**: `feature_log_prob_` muestra los términos que pesan en cada clase (`nasa`, `linux` → Sci_Tech; `oil price`, `treasury` → Business; `quarterback`, `nfl` → Sports; `gaza`, `troop` → World).
 - **SVM lineal** queda como alternativa prácticamente empatada.
 
-## ¿Aporta el preprocesamiento del Módulo 2?
+## ¿Aporta el preprocesamiento del Módulo 2? Crudo vs. stemming vs. lematización
 
-Con el mismo modelo, el texto crudo da un F1 apenas mayor (0,8906 vs. 0,8885, dentro de un desvío). Pero sus términos más distintivos de Business son **fragmentos de URL** (`fullquote`, `investor reuters`, `aspx ticker`), y la agencia funciona como pista de la clase (AFP es 74% World, AP solo 3% Business). Es *shortcut learning*: el modelo aprende quién escribió el cable y no de qué trata la noticia. Con el pipeline del Módulo 2 se obtiene **el mismo desempeño con 42% menos vocabulario** (25.780 vs. 44.194 términos), y el modelo aprende del contenido real.
+| Entrada (mismo modelo y vectorizador) | Vocabulario | F1-macro CV | Top términos de Business |
+|---|---|---|---|
+| Texto crudo | 44.194 | 0,8906 | `fullquote`, `investor reuters`, `aspx ticker` |
+| Stemming de Porter (función `limpiar_texto` del notebook de clase) | 27.245 | 0,8955 | `fullquot`, `investor reuter`, `quickinfo` |
+| `clean_text` + stemming de Porter | 26.143 | 0,8890 | `oil price`, `insur`, `profit` |
+| **Pipeline del Módulo 2 (limpieza + lematización)** | **25.780** | **0,8885** | `oil price`, `insurance`, `inc`, `profit` |
+
+Las dos variantes sin limpieza estructural obtienen el F1 más alto, pero **por un atajo**: sus términos más distintivos de Business son **fragmentos de URL** del link de cotizaciones de Reuters, y la agencia funciona como pista de la clase (AFP es 74% World, AP solo 3% Business). Es *shortcut learning*: el modelo aprende quién escribió el cable y no de qué trata la noticia. Con la limpieza previa, **stemming y lematización empatan** (0,8890 vs. 0,8885). Se mantiene la lematización porque da palabras reales e interpretables (`insurance` en vez de `insur`), con el vocabulario más chico.
+
+## CountVectorizer (BoW) vs. TfidfVectorizer
+
+![BoW vs TF-IDF](reports/figures/bow_vs_tfidf.png)
+
+- **TF-IDF iguala o mejora a BoW en los cuatro modelos.** La mejora es mayor en los lineales (SVM +2,4 puntos, Regresión Logística +1,5): la norma L2 pone a todos los documentos en la misma escala y facilita la optimización. En Naive Bayes, pensado para conteos, la diferencia es chica (+0,3).
+- **Random Forest** (el cuarto modelo del notebook de clase) queda unos 4,4 puntos abajo y es unas 27 veces más lento que Naive Bayes. Con 25.780 columnas esparsas no aprovecha la señal repartida en miles de términos. Por eso, para texto vectorizado se usan modelos lineales.
 
 ## Análisis preliminar: ¿qué categorías son más difíciles?
 
@@ -103,8 +134,11 @@ Con el mismo modelo, el texto crudo da un F1 apenas mayor (0,8906 vs. 0,8885, de
 - **Business ↔ Sci_Tech es la confusión principal:** 45 noticias de Sci_Tech se predicen como Business (9%) y 39 en sentido inverso (7,8%). Son noticias de empresas tecnológicas (la oferta de Oracle por PeopleSoft, Symantec comprando Veritas) que comparten vocabulario de ambas clases.
 - **World → Business (7,2%):** economía internacional (petróleo, comercio, resultados de empresas extranjeras) etiquetada como World.
 - **Sports es la clase más fácil** (recall 96,8%), por su vocabulario casi exclusivo.
+- **Curvas Precision-Recall (one-vs-rest):** PR-AUC de 0,973 en Sports, 0,940 en World, 0,932 en Sci_Tech y 0,878 en Business, lo que confirma a Business como la clase más difícil. Con un umbral de 0,5, Business tiene precisión 0,855 y recall 0,834. Si se sube a 0,9, la precisión pasa a 0,924 pero el recall cae a 0,488. El umbral es una decisión de negocio.
+- **F1 macro, weighted y micro coinciden** (0,892) porque las clases están perfectamente balanceadas.
+- **Sin etiquetas (LDA, 4 tópicos):** aparecen dos tópicos de deportes y uno de política y conflicto, pero Business y Sci_Tech quedan fusionadas en un mismo tópico (51% / 45%). Es la misma frontera difusa que muestra el clasificador supervisado.
 - Son errores de **contexto, no de ruido**: una bolsa de palabras no distingue si una noticia sobre Microsoft habla del producto o de sus resultados. Es la limitación que debería resolver el Transformer del Módulo 4.
 
 ## Versiones
 
-Python 3.13 · scikit-learn 1.9.1 · pandas 3.0.5 · numpy 2.5.3 · scipy 1.18.1 · spaCy 3.8.18 (`en_core_web_sm` 3.8.0) · matplotlib 3.11.2. Semilla: 42.
+Python 3.13 · scikit-learn 1.9.1 · joblib 1.6.0 · nltk 3.10.4 · pandas 3.0.5 · numpy 2.5.3 · scipy 1.18.1 · spaCy 3.8.18 (`en_core_web_sm` 3.8.0) · matplotlib 3.11.2. Semilla: 42.
