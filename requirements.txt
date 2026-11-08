@@ -2,7 +2,10 @@ pandas==3.0.5
 numpy==2.5.3
 scipy==1.18.1
 scikit-learn==1.9.1
+joblib==1.6.0
 spacy==3.8.18
+nltk==3.10.4
 matplotlib==3.11.2
 jupyter
 # Modelo de spaCy (se instala aparte):  python -m spacy download en_core_web_sm   (v3.8.0)
+# Stop-words de NLTK (solo para la comparación con stemming):  python -c "import nltk; nltk.download('stopwords')"

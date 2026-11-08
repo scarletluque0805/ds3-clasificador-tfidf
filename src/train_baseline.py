@@ -14,7 +14,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
 from sklearn.model_selection import StratifiedKFold, cross_validate
@@ -48,6 +49,11 @@ MODELOS = {
     "Naive Bayes": lambda **kw: MultinomialNB(**{"alpha": 0.1, **kw}),
     "Regresión Logística": lambda **kw: LogisticRegression(**{"C": 10, "max_iter": 2000, "random_state": SEED, **kw}),
     "SVM lineal": lambda **kw: LinearSVC(**{"C": 0.5, "random_state": SEED, **kw}),
+}
+
+# Modelo extra (no lineal) para la comparación BoW vs. TF-IDF, como en el notebook de clase
+MODELOS_EXTRA = {
+    "Random Forest": lambda **kw: RandomForestClassifier(**{"n_estimators": 200, "n_jobs": -1, "random_state": SEED, **kw}),
 }
 
 # Hiperparámetro de regularización de cada modelo (se ajusta con CV en la etapa 2)
@@ -88,12 +94,17 @@ def validar(train_df, test_df) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------- modelo
-def construir_pipeline(modelo: str, max_features=None, ngram_range=(1, 1), clf_params=None, **tfidf_extra) -> Pipeline:
+def construir_pipeline(modelo: str, max_features=None, ngram_range=(1, 1), clf_params=None,
+                       vectorizador: str = "tfidf", **tfidf_extra) -> Pipeline:
+    """vectorizador='tfidf' (TfidfVectorizer) o 'bow' (CountVectorizer: conteos crudos, sin IDF ni norma)."""
     params = {**TFIDF_FIJOS, **tfidf_extra}
-    return Pipeline([
-        ("tfidf", TfidfVectorizer(max_features=max_features, ngram_range=ngram_range, **params)),
-        ("clf", MODELOS[modelo](**(clf_params or {}))),
-    ])
+    if vectorizador == "bow":
+        params = {k: v for k, v in params.items() if k not in ("sublinear_tf", "norm")}
+        vec = CountVectorizer(max_features=max_features, ngram_range=ngram_range, **params)
+    else:
+        vec = TfidfVectorizer(max_features=max_features, ngram_range=ngram_range, **params)
+    fabrica = {**MODELOS, **MODELOS_EXTRA}[modelo]
+    return Pipeline([("tfidf", vec), ("clf", fabrica(**(clf_params or {})))])
 
 
 def _cv():
@@ -176,6 +187,38 @@ def graficar_confusion(cm, path, titulo):
     return fig
 
 
+# ---------------------------------------------------------------- persistencia e inferencia
+MODELO_PATH = ROOT / "models" / "clasificador_tfidf_nb.joblib"
+
+
+def guardar_modelo(pipe: Pipeline, path: Path = MODELO_PATH) -> Path:
+    """Guarda el Pipeline completo (vectorizador + clasificador) en un solo archivo."""
+    import joblib
+    path.parent.mkdir(exist_ok=True)
+    joblib.dump(pipe, path, compress=3)
+    return path
+
+
+def cargar_modelo(path: Path = MODELO_PATH) -> Pipeline:
+    import joblib
+    return joblib.load(path)
+
+
+def predecir_categoria(textos, pipe: Pipeline = None):
+    """Texto crudo -> preprocesamiento del Módulo 2 -> categoría + probabilidad de cada clase."""
+    from .text_preprocessing import preprocess_series
+    pipe = pipe or cargar_modelo()
+    if isinstance(textos, str):
+        textos = [textos]
+    limpios = preprocess_series(textos, remove_stopwords=True)
+    proba = pipe.predict_proba(limpios)
+    clases = pipe.classes_
+    out = pd.DataFrame(proba, columns=clases).round(3)
+    out.insert(0, "categoria", clases[proba.argmax(axis=1)])
+    out.insert(0, "texto", list(textos))
+    return out
+
+
 # ---------------------------------------------------------------- script
 def main():
     REPORTS.mkdir(exist_ok=True); FIGURES.mkdir(parents=True, exist_ok=True)
@@ -199,6 +242,7 @@ def main():
     print(classification_report(y_te, pred, digits=3))
     graficar_confusion(cm, FIGURES / "matriz_confusion.png", f"{mejor.modelo} · TF-IDF {mejor.ngram_range} · test")
 
+    guardar_modelo(final)
     resumen = dict(modelo=mejor.modelo, ngram_range=mejor.ngram_range, max_features=str(mejor.max_features),
                    **{mejor.parametro: float(mejor.valor)},
                    f1_macro_cv=round(float(mejor.f1_macro_cv), 4),
