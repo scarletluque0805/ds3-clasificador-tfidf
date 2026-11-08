@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.venv/
+venv/
+.env
+# Caché del preprocesamiento: se regenera con src/train_baseline.py
+data/processed/
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
