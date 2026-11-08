@@ -1,0 +1,11 @@
+{
+  "modelo": "Naive Bayes",
+  "ngram_range": "(1, 2)",
+  "max_features": "sin límite",
+  "alpha": 0.3,
+  "f1_macro_cv": 0.8885,
+  "test": {
+    "accuracy": 0.892,
+    "f1_macro": 0.892
+  }
+}
